@@ -24,11 +24,13 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Iterator;
+import java.util.NoSuchElementException;
 
 /**
  * Block oriented file implementation. You can only read and write in blocks (a constant size). There is however a special block, the first one, aka header
@@ -84,15 +86,26 @@ public class BlockFile implements AutoCloseable, Iterable<ByteBuffer> {
         ensureBytesTransferred(bytes);
     }
 
-    public void read(ByteBuffer buffer, long block) throws IOException {
+    /**
+     * @param buffer
+     * @param block
+     * @return <code>true</code> if block was read and <code>false</code> if end of file
+     * @throws IOException
+     */
+    public boolean read(ByteBuffer buffer, long block) throws IOException {
         ensureBufferRemainingBytes(buffer);
         var bytes = fileChannel.read(buffer, (block + 1) * header.blockSize());
         // make sure we read enough bytes from channel
-        ensureBytesTransferred(bytes);
+        return ensureBytesTransferred(bytes);
     }
 
-    private void ensureBytesTransferred(int bytes) {
-        if (bytes != header().blockSize()) {
+    private boolean ensureBytesTransferred(int bytes) {
+        if (bytes == header().blockSize) {
+            return true;
+        } else if (bytes == -1) {
+            // EOF
+            return false;
+        } else {
             throw new IllegalStateException(
                     format("transferred only %d bytes, expected block size is %d", bytes, header().blockSize()));
         }
@@ -108,7 +121,41 @@ public class BlockFile implements AutoCloseable, Iterable<ByteBuffer> {
 
     @Override
     public Iterator<ByteBuffer> iterator() {
-        return null;
+        return new Iterator<>() {
+            ByteBuffer nextBuffer;
+            long block = 0;
+
+            @Override
+            public boolean hasNext() {
+                if (nextBuffer != null) {
+                    return true;
+                } else {
+                    var buffer = ByteBuffer.allocate(header().blockSize());
+                    try {
+                        var position = block;
+                        if (read(buffer, position)) {
+                            block++;
+                            nextBuffer = buffer;
+                            return true;
+                        } else {
+                            return false;
+                        }
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                }
+            }
+
+            @Override
+            public ByteBuffer next() {
+                if (hasNext()) {
+                    var buffer = nextBuffer;
+                    nextBuffer = null;
+                    return buffer;
+                }
+                throw new NoSuchElementException();
+            }
+        };
     }
 
     @Override
