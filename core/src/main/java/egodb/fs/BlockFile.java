@@ -28,7 +28,9 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 
 /**
  * Block oriented file implementation. You can only read and write in blocks (a constant size). There is however a special block, the first one, aka header
@@ -89,6 +91,36 @@ public class BlockFile implements AutoCloseable, Iterable<ByteBuffer> {
         var bytes = fileChannel.read(buffer, (block + 1) * header.blockSize());
         // make sure we read enough bytes from channel
         ensureBytesTransferred(bytes);
+    }
+
+    public void writeAll(ByteBuffer[] buffers, int blocks[]) throws IOException {
+        if (buffers.length != blocks.length) {
+            throw new IllegalArgumentException("size of buffers array and blocks array is not equal");
+        }
+
+        int i = 0;
+        while (i < buffers.length) {
+            int block = blocks[i];
+            List<ByteBuffer> batch = new ArrayList<>();
+            // iterate until block number increment by one
+            do {
+                var buffer = buffers[i];
+                ensureBufferRemainingBytes(buffer);
+                batch.add(buffer);
+                i++;
+                if (i >= buffers.length) {
+                    break;
+                }
+            } while (blocks[i] == block + 1);
+            int position = (block + 1) * header.blockSize;
+            fileChannel.position(position);
+            var bytes = fileChannel.write(batch.toArray(ByteBuffer[]::new));
+            var transfered = batch.size() * header.blockSize;
+            if (bytes != transfered) {
+                throw new IllegalStateException(
+                        format("transferred only %d bytes, expected size is %d", bytes, transfered));
+            }
+        }
     }
 
     private void ensureBytesTransferred(int bytes) {
